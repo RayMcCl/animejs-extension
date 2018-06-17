@@ -1,177 +1,145 @@
-import * as path from 'path';
-import * as vscode from 'vscode';
+/*---------------------------------------------------------
+ * Copyright (C) Microsoft Corporation. All rights reserved.
+ *--------------------------------------------------------*/
+'use strict';
 
-const cats = {
-    'Coding Cat': 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif',
-    'Compiling Cat': 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif',
-    'Testing Cat': 'https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif'
-};
+import * as vscode from 'vscode';
+import * as path from 'path';
+
+const animeRegex = /.*animejs.*/g;
 
 export function activate(context: vscode.ExtensionContext) {
 
-    context.subscriptions.push(vscode.commands.registerCommand('catCoding.start', () => {
-        CatCodingPanel.createOrShow(context.extensionPath);
-    }));
+    let previewUri = vscode.Uri.parse('animejs-preview://authority/animejs-preview');
+    let webviewJS = getMiscPath('main.js', context);
 
-    context.subscriptions.push(vscode.commands.registerCommand('catCoding.doRefactor', () => {
-        if (CatCodingPanel.currentPanel) {
-            CatCodingPanel.currentPanel.doRefactor();
+    function getMiscPath(file: string, context: vscode.ExtensionContext, asUri = false): string {
+        if (asUri) {
+            return vscode.Uri.file(context.asAbsolutePath(path.join('media', file))).toString();
         }
-    }));
-}
-
-/**
- * Manages cat coding webview panels
- */
-class CatCodingPanel {
-    /**
-     * Track the currently panel. Only allow a single panel to exist at a time.
-     */
-    public static currentPanel: CatCodingPanel | undefined;
-
-    private static readonly viewType = 'catCoding';
-
-    private readonly _panel: vscode.WebviewPanel;
-    private readonly _extensionPath: string;
-    private _disposables: vscode.Disposable[] = [];
-
-    public static createOrShow(extensionPath: string) {
-        const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
-
-        // If we already have a panel, show it.
-        // Otherwise, create a new panel.
-        if (CatCodingPanel.currentPanel) {
-            CatCodingPanel.currentPanel._panel.reveal(column);
-        } else {
-            CatCodingPanel.currentPanel = new CatCodingPanel(extensionPath, column || vscode.ViewColumn.One);
-        }
+        return vscode.Uri.file(context.asAbsolutePath(path.join('media', file))).fsPath;
     }
 
-    private constructor(extensionPath: string, column: vscode.ViewColumn) {
-        this._extensionPath = extensionPath;
+	class TextDocumentContentProvider implements vscode.TextDocumentContentProvider {
+		private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+        private _uri: Object;
 
-        // Create and show a new webview panel
-        this._panel = vscode.window.createWebviewPanel(CatCodingPanel.viewType, "Cat Coding", column, {
-            // Enable javascript in the webview
-            enableScripts: true,
+		public provideTextDocumentContent(uri: vscode.Uri): string {
+            console.log('URI', uri);
+            this._uri = uri;
+			return this.createCssSnippet();
+		}
 
-            // And restric the webview to only loading content from our extension's `media` directory.
-            localResourceRoots: [
-                vscode.Uri.file(path.join(this._extensionPath, 'media'))
-            ]
-        });
+		get onDidChange(): vscode.Event<vscode.Uri> {
+			return this._onDidChange.event;
+		}
 
-        // Set the webview's initial html content 
-        this._update();
+		public update(uri: vscode.Uri) {
+			this._onDidChange.fire(uri);
+		}
 
-        // Listen for when the panel is disposed
-        // This happens when the user closes the panel or when the panel is closed programatically
-        this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+		private createCssSnippet() {
+			let editor = vscode.window.activeTextEditor;
+			if (editor && !(editor.document.languageId === 'javascript')) {
+				return this.errorSnippet("Active editor doesn't show a AnimeJS document - no properties to preview.")
+			}
+			return this.extractSnippet();
+		}
 
-        // Update the content based on view changes
-        this._panel.onDidChangeViewState(e => {
-            if (this._panel.visible) {
-                this._update()
+		private extractSnippet(): string {
+            let editor = vscode.window.activeTextEditor;
+            if(!editor) {
+                return '';
             }
-        }, null, this._disposables);
 
-        // Handle messages from the webview
-        this._panel.webview.onDidReceiveMessage(message => {
-            switch (message.command) {
-                case 'alert':
-                    vscode.window.showErrorMessage(message.text);
-                    return;
+			let text = editor.document.getText();
+            
+            let r = this.exec(animeRegex, text);
+
+            if(r) {
+                text = text.substr(0, r.index) + text.substr(r.index + r[0].length, text.length);
             }
-        }, null, this._disposables);
-    }
 
-    public doRefactor() {
-        // Send a message to the webview webview.
-        // You can send any JSON serializable data.
-        this._panel.webview.postMessage({ command: 'refactor' });
-    }
-
-    public dispose() {
-        CatCodingPanel.currentPanel = undefined;
-
-        // Clean up our resources
-        this._panel.dispose();
-
-        while (this._disposables.length) {
-            const x = this._disposables.pop();
-            if (x) {
-                x.dispose();
-            }
+    		return this.snippet(text);
         }
-    }
-
-    private _update() {
-        // Vary the webview's content based on where it is located in the editor.
-        switch (this._panel.viewColumn) {
-            case vscode.ViewColumn.Two:
-                this._updateForCat('Compiling Cat');
-                return;
-
-            case vscode.ViewColumn.Three:
-                this._updateForCat('Testing Cat');
-                return;
-
-            case vscode.ViewColumn.One:
-            default:
-                this._updateForCat('Coding Cat');
-                return;
+        
+        private exec (regex: RegExp, str: string): RegExpExecArray | null {
+            regex.lastIndex = 0;
+            return regex.exec(str);
         }
-    }
 
-    private _updateForCat(catName: keyof typeof cats) {
-        this._panel.title = catName;
-        this._panel.webview.html = this._getHtmlForWebview(cats[catName]);
-    }
+		private errorSnippet(error: string): string {
+			return `
+				<body>
+					${error}
+				</body>`;
+		}
 
-    private _getHtmlForWebview(catGif: string) {
+		private snippet(str: String): string {
 
-        // Local path to main script run in the webview
-        const scriptPathOnDisk = vscode.Uri.file(path.join(this._extensionPath, 'media', 'main.js'));
-        const cssPathOnDisk = vscode.Uri.file(path.join(this._extensionPath, 'media', 'main.css'));
+            console.log(webviewJS);
 
-        // And the uri we use to load this script in the webview
-        const scriptUri = scriptPathOnDisk.with({ scheme: 'vscode-resource' });
-        const cssUri = cssPathOnDisk.with({ scheme: 'vscode-resource' });
-
-        // Use a nonce to whitelist which scripts can be run
-        const nonce = getNonce();
-
-        return `<!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src vscode-resource: https:; script-src vscode-resource:; style-src vscode-resource:;">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Cat Coding</title>
-            </head>
-            <body>
-                <div class="content">Test</div>
-                <div id="motionPath" style="position:relative">
-                    <div class="motion-path">
-                        <div class="small square el follow-path"></div> 
-                        <svg width="256" height="112" viewBox="0 0 256 112">
-                            <path fill="none" stroke="currentColor" stroke-width="1" d="M8,56 C8,33.90861 25.90861,16 48,16 C70.09139,16 88,33.90861 88,56 C88,78.09139 105.90861,92 128,92 C150.09139,92 160,72 160,56 C160,40 148,24 128,24 C108,24 96,40 96,56 C96,72 105.90861,92 128,92 C154,93 168,78 168,56 C168,33.90861 185.90861,16 208,16 C230.09139,16 248,33.90861 248,56 C248,78.09139 230.09139,96 208,96 L48,96 C25.90861,96 8,78.09139 8,56 Z"></path>
-                        </svg> 
-                    </div>
-                </div>
-                <link rel="stylesheet" type="text/css" href="${cssUri}"></link>
-                <script nonce="${nonce}" src="${scriptUri}"></script>
-            </body>
+            return `<html>
+                <head>
+                    <script>
+                        window.addEventListener('load', function () {
+                            document.querySelector('#html').addEventListener('change', function () {
+                                document.querySelector('#root').innerHTML = this.value;
+                                var evt = document.createEvent('Event');  
+                                evt.initEvent('load', false, false);  
+                                window.dispatchEvent(evt);
+                            });
+                        });
+                    </script>
+                    <script src=${webviewJS}></script>
+                    <script>
+                        ${str}
+                    </script>
+                </head>
+                <body>
+                    <div id="root"></div>
+					<textarea id="html"></textarea>
+                </body>
             </html>`;
-    }
-}
+		}
+	}
 
-function getNonce() {
-    let text = "";
-    const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+	let provider = new TextDocumentContentProvider();
+	let registration = vscode.workspace.registerTextDocumentContentProvider('animejs-preview', provider);
+
+	vscode.workspace.onDidChangeTextDocument((e: vscode.TextDocumentChangeEvent) => {
+		if (vscode.window.activeTextEditor && e.document === vscode.window.activeTextEditor.document) {
+			provider.update(previewUri);
+		}
+	});
+
+	vscode.window.onDidChangeTextEditorSelection((e: vscode.TextEditorSelectionChangeEvent) => {
+		if (e.textEditor === vscode.window.activeTextEditor) {
+			provider.update(previewUri);
+		}
+	})
+
+	let disposable = vscode.commands.registerCommand('extension.showAnimeJSPreview', () => {
+		return vscode.commands.executeCommand('vscode.previewHtml', previewUri, vscode.ViewColumn.Two, 'AnimeJS Preview').then((success) => {
+		}, (reason) => {
+			vscode.window.showErrorMessage(reason);
+		});
+	});
+
+	let highlight = vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(200,200,200,.35)' });
+
+	vscode.commands.registerCommand('extension.revealAnimeJS', (uri: vscode.Uri, propStart: number, propEnd: number) => {
+
+		for (let editor of vscode.window.visibleTextEditors) {
+			if (editor.document.uri.toString() === uri.toString()) {
+				let start = editor.document.positionAt(propStart);
+				let end = editor.document.positionAt(propEnd + 1);
+
+				editor.setDecorations(highlight, [new vscode.Range(start, end)]);
+				setTimeout(() => editor.setDecorations(highlight, []), 1500);
+			}
+		}
+	});
+
+	context.subscriptions.push(disposable, registration);
 }
