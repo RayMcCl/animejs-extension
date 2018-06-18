@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 
 const animeRegex = /.*animejs.*/g;
 
@@ -12,6 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     let previewUri = vscode.Uri.parse('animejs-preview://authority/animejs-preview');
     let webviewJS = getMiscPath('main.js', context);
+    let webviewCSS = getMiscPath('main.css', context);
 
     function getMiscPath(file: string, context: vscode.ExtensionContext, asUri = false): string {
         if (asUri) {
@@ -22,11 +24,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	class TextDocumentContentProvider implements vscode.TextDocumentContentProvider {
 		private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
-        private _uri: Object;
 
 		public provideTextDocumentContent(uri: vscode.Uri): string {
             console.log('URI', uri);
-            this._uri = uri;
 			return this.createCssSnippet();
 		}
 
@@ -53,15 +53,52 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
 			let text = editor.document.getText();
-            
+
+			let fileName = editor.document.fileName;
+
+			let name = this.getAnimName(fileName);
+
+			let previewHTML = this.loadPreviewHTML(fileName);
+			let previewCSS = this.loadPreviewCSS(fileName);
+
             let r = this.exec(animeRegex, text);
 
             if(r) {
                 text = text.substr(0, r.index) + text.substr(r.index + r[0].length, text.length);
             }
 
-    		return this.snippet(text);
-        }
+    		return this.snippet(name, text, previewHTML, previewCSS);
+		}
+
+		private getAnimName (fileName: string) {
+			const r = /([a-zA-Z0-9]+)\.anime\.js/.exec(fileName);
+
+			return r ? r[1] : '';
+		}
+		
+		private loadPreviewHTML (fileName: String) {
+			let preview = vscode.Uri.file(fileName.replace(/\.anime\.js/, '.preview.html'));
+
+			try {
+				return fs.readFileSync(preview.fsPath, {
+					encoding: 'utf8'
+				});
+			} catch (e) {
+				return '';
+			}
+		}
+
+		private loadPreviewCSS (fileName: String) {
+			let preview = vscode.Uri.file(fileName.replace(/\.anime\.js/, '.preview.css'));
+
+			try {
+				return fs.readFileSync(preview.fsPath, {
+					encoding: 'utf8'
+				});
+			} catch (e) {
+				return '';
+			}
+		}
         
         private exec (regex: RegExp, str: string): RegExpExecArray | null {
             regex.lastIndex = 0;
@@ -75,31 +112,29 @@ export function activate(context: vscode.ExtensionContext) {
 				</body>`;
 		}
 
-		private snippet(str: String): string {
+		private snippet(name: String, str: String, previewHTML: String, previewCSS: String): string {
 
             console.log(webviewJS);
 
             return `<html>
                 <head>
-                    <script>
-                        window.addEventListener('load', function () {
-                            document.querySelector('#html').addEventListener('change', function () {
-                                document.querySelector('#root').innerHTML = this.value;
-                                var evt = document.createEvent('Event');  
-                                evt.initEvent('load', false, false);  
-                                window.dispatchEvent(evt);
-                            });
-                        });
-                    </script>
                     <script src=${webviewJS}></script>
-                    <script>
-                        ${str}
-                    </script>
+                    <link type="text/css" rel="stylesheet" href=${webviewCSS}></script>
+					<script>
+						window.addEventListener('load', function () {
+							${str}
+						});
+					</script>
+					<style>
+						${previewCSS}
+					</style>
                 </head>
-                <body>
-                    <div id="root"></div>
-					<textarea id="html"></textarea>
-                </body>
+				<body>
+					<h1>${name} Preview</h1>
+					<div class="preview">
+						${previewHTML}
+					</div>
+				</body>
             </html>`;
 		}
 	}
